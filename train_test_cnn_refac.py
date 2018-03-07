@@ -497,7 +497,7 @@ def main():
     ratio_validation_data = 0.25
 
     num_runs = 20
-    nb_epoch = 400
+    nb_epoch = 60
 
     data_augmentation = False
     batch_size = 32
