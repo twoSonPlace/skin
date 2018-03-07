@@ -18,16 +18,20 @@ from help_functions import *
 # Per-data normalization. No clach and histogram equalization.
 # Adjust gamma parameter was CHANGDED TO A VERY SMALL VALUE
 # -------- 
-def my_PreProc(data):
+def my_PreProc(data, norm = ''):
     assert(len(data.shape)==4)
-    assert (data.shape[1]==3)  #Use the original  RGB Color image
+    assert (data.shape[3]==3)  #Use the original  RGB Color image
     
     #black-white conversion
     train_imgs = rgb2gray(data)
 
     #my preprocessing:
-    #train_imgs = dataset_normalized(train_imgs)
-    #train_imgs = data_normalized(train_imgs)
+    if norm == 'dataset_normalized':
+        train_imgs = dataset_normalized(train_imgs)
+    elif norm == 'data_normalized':
+        train_imgs = data_normalized(train_imgs)
+    else : pass
+
 
     #train_imgs = clahe_equalized(train_imgs)
     #train_imgs = histo_equalized(train_imgs)

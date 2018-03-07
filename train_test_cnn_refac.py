@@ -14,7 +14,7 @@ from keras.preprocessing import image
 from keras.applications.vgg16 import preprocess_input
 
 from keras.models import model_from_json, Sequential
-from keras.layers import Input, Dense, Dropout, Activation, Flatten
+from keras.layers import Input, Dense, Dropout, Activation, Flatten,BatchNormalization
 from keras.layers.convolutional import Conv2D, MaxPooling2D, AveragePooling2D
 from keras.models import Model
 
@@ -26,15 +26,19 @@ from keras.utils import np_utils
 from sklearn.metrics import roc_curve, roc_auc_score, confusion_matrix, precision_recall_curve, jaccard_similarity_score, f1_score
 from sklearn.utils   import shuffle
 
+# image processing
+from scipy.ndimage.filters import gaussian_filter
+from scipy import interp
+
 # plot
 import matplotlib.pyplot as plt
-
+plt.switch_backend('agg')
 
 sys.path.insert(0, './lib/')
 from help_functions import *
 from pre_processing_v2 import *
-from multiGpuModel import multi_gpu_model
-from ASIGN_GPU_MODEL import asign_gpu_model
+#from multiGpuModel import multi_gpu_model
+#from ASIGN_GPU_MODEL import asign_gpu_model
 K.set_image_data_format('channels_last')
 K.set_image_dim_ordering('tf')
 def write_hdf5(arr,outfile):
@@ -96,7 +100,8 @@ def get_datasets(Nimgs, imgs_dir, postFix,ratio_for_test):
     imgs = np.transpose(imgs,(0,1,2,3))    # when handling grayscale images... that should be made for my_preprocessing..
 
     # image processing in which RGB color images are converted into grayscale ones.
-    #imgs = my_PreProc(imgs) 
+    ##normalize method ['dataset_normalized', 'data_normalized', '']
+    #imgs = my_PreProc(imgs, norm='') 
     #print "imgs.shape = ", imgs.shape
 
     # to examine the convered images
@@ -123,84 +128,6 @@ def get_datasets(Nimgs, imgs_dir, postFix,ratio_for_test):
     return imgs_train, groundTruth_train#, imgs_test, groundTruth_test 
 
 
-def get_datasets_train_test(Nimgs, imgs_dir, ratio_for_test):
-
-    imgs =          np.empty((Nimgs,img_height,img_width,img_channels))
-    groundTruth =   np.zeros(Nimgs)
-    tag_for_train = np.zeros(Nimgs)
-    
-    tmp = 0
-    label_index = 0        # 'negative' directory appears first, so label 0 is set to the negative
-    index_accumulated = 0
-    for path, subdirs, files in os.walk(imgs_dir): #list all files, directories in the path
-
-        print '\nFolder: ', path
-        if files:
-
-            #files = [ fi for fi in files if not fi.endswith(".bmp") ]        # exclude '*.bmp'
-            files = [ fi for fi in files if not fi.endswith(".png") ]        # exclude '*.png'
-
-            for i in range(len(files)):
-                #print files[i]
-                full_filenm = os.path.join(path, files[i])    
-                #print str(i) + ': ' + str(index_accumulated + i) + " : " + full_filenm
-                img = Image.open(full_filenm)
-                img = img.resize((img_width, img_height))
-
-                # check if image read does not fail
-                #img.show()
-
-                img = np.asarray(img)
-                if img.ndim == 2:
-                     img = np.stack((img,)*3)    # forced to be converted into RGB color format.
-                     #img = np.transpose(img, (0,1,2))
-                     img = np.transpose(img, (1,2,0))       # when handling grayscale images
-
-                imgs[index_accumulated + i] = img
-                groundTruth[index_accumulated + i] = label_index
-
-                # splitting the data
-                if np.random.rand() > ratio_for_test:
-                    tag_for_train[index_accumulated + i] = 1
-                else:
-                    tag_for_train[index_accumulated + i] = 0
-
-            tmp = len(files)
-            label_index = label_index + 1
-            print "   label : " + str(label_index - 1)
-
-        index_accumulated = index_accumulated + tmp
-
-    #reshaping for my standard tensors
-    imgs = np.transpose(imgs,(0,3,1,2))    # when handling grayscale images... that should be made for my_preprocessing..
-
-    # image processing in which RGB color images are converted into grayscale ones.
-    #imgs = my_PreProc(imgs,backend='tf') 
-    print "imgs.shape = ", imgs.shape
-
-    # to examine the convered images
-    '''
-    num_imgs = imgs.shape[0]
-    for i in range(num_imgs):
-        array = 255*imgs[i,0,:,:]    # In a my_PreProc function, values between 0 and 1 are return. To visualize .. 
-        img2 = Image.fromarray(array.astype(np.uint8))
-        img2.save( str(i) + '_chk.gif')
-    exit()
-    '''
-
-    # random shuffle
-    imgs, groundTruth, tag_for_train = shuffle(imgs, groundTruth, tag_for_train, random_state=0)
-
-    index = np.nonzero(tag_for_train == 1)[0]
-    imgs_train = imgs[index,:,:,:]
-    groundTruth_train = groundTruth[index]
-
-    index = np.nonzero(tag_for_train == 0)[0]
-    imgs_test = imgs[index,:,:,:]
-    groundTruth_test = groundTruth[index]
-
-    return imgs_train, groundTruth_train, imgs_test, groundTruth_test 
-
 def custom_cnn(input):    
     x = Conv2D(12, (3,3), padding='same', activation='relu')(input)
     x = Dropout(0.20)(x)   # very important. dropout is inserted into somewhere between consecutive Conv2D layers, rather than after max pooling layers
@@ -215,6 +142,7 @@ def custom_cnn(input):
     z = Flatten()(y)
     z = Dropout(0.20)(z)
     z = Dense(128, activation='relu')(z)
+    z = BatchNormalization()(z)
     z = Dense(nb_classes, activation='softmax', name='prediction')(z)
 
     model = Model(input=input, output=z)
@@ -252,7 +180,8 @@ def vgg16_scratch(num_class):
 
     model.summary()
     return model
-def custom_vgg16(inputLayer, num_class, non_trainable=15):
+
+def vgg16_custom(inputLayer, num_class, non_trainable=15):
 
     base_model = VGG16(weights="imagenet", include_top=False,input_shape= (224,224,3) )
     last = base_model.output
@@ -263,6 +192,7 @@ def custom_vgg16(inputLayer, num_class, non_trainable=15):
     x = Dense(4096, activation='relu', name='fc1')(x)
     x = Dense(4096, activation='relu', name='fc2')(x)
     #x = Dense(8, activation='softmax', name='predictions')(x)
+    x = BatchNormalization()(x)
 
     preds = Dense(num_class, activation="softmax")(x)
 
@@ -270,11 +200,46 @@ def custom_vgg16(inputLayer, num_class, non_trainable=15):
 
     for layer in model.layers[:non_trainable]:
         layer.trainable = False
-    print model.summary()
+    for layer in model.layers[non_trainable:]:
+        layer.trainable = True
 
+    print model.summary()
     return model
 
-def train(run):
+
+def vgg16_custom2(input, img_height, img_width):
+    # Get back the conv. part of a VGG network trained on ImageNet
+    model_vgg16_conv = VGG16(input_shape=( img_height, img_width,3), weights='imagenet', include_top=False, pooling=max)
+
+    #--
+    # freeze the first 10 layers of VGG16
+    #--
+    for layer in model_vgg16_conv.layers[:13]:
+       layer.trainable = False
+    for layer in model_vgg16_conv.layers[13:]:
+       layer.trainable = True
+
+    model_vgg16_conv.summary()
+
+    # use the generated model
+    output_vgg16_conv = model_vgg16_conv(input)
+
+    # add the FC layers
+    x = Flatten(name='flatten')(output_vgg16_conv)
+    x = Dropout(0.3)(x)
+    x = Dense(128, activation='relu', name='fc1')(x)
+    x = Dropout(0.20)(x)
+    x = BatchNormalization()(x)
+    x = Dense(nb_classes, activation='softmax', name='prediction')(x)
+
+    # create my own model
+    model = Model(input=input, output=x)
+    model.summary()
+
+    return model 
+
+
+def train(modelNm, run):
     print '\n---------------------' + str(run) + '-th run ------------------------------------------\n'
     #-------
     # spliting the data into training and teste
@@ -310,18 +275,31 @@ def train(run):
         #input = Input(shape=(cnn_img_channels, img_height, img_width), name='image_input')
     print 'image_dim_ordering = ' + str(channel_axis),'\n', K.image_data_format()
 
-    #model = custom_cnn(input)
-    nonTrainLayer = 15
-    #model = custom_vgg16(input, nb_classes, nonTrainLayer)
-    model = vgg16_scratch(nb_classes)
+    if modelNm == 'custom_cnn':
+        model = custom_cnn(input)
+
+    elif modelNm == 'vgg16_scratch':
+        model = vgg16_scratch(nb_classes)
+
+    elif modelNm == 'vgg16_custom':
+        nonTrainLayer = 15
+        model = vgg16_custom(input, nb_classes, nonTrainLayer)
+
+    elif modelNm == 'vgg16_custom2':
+        model = vgg16_custom2(input, img_height, img_width)
+        
     #model = multi_gpu_model(model, gpus=4)
     #model = asign_gpu_model(model, 3)
+    
+    ##optimizer setting 
     sgd = SGD(lr=0.0015, decay=1e-6, momentum=0.025, nesterov=True) # let's train the model using SGD + momentum (how original).
     #sgd = SGD(lr=0.1, decay=1e-2, momentum=0.9, nesterov=True) #sgd for VGG16  let's train the model using SGD + momentum (how original).
     #adam = Adam(lr=0.001, beta_1=0.3, beta_2=0.599, epsilon=None, decay=0.00001, amsgrad=True)
     #adam = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0000, amsgrad=False)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
-    #model.compile(loss='categorical_crossentropy', optimizer=adam, metrics=['accuracy'])
+    adam = Adam(lr=0.001, beta_1=0.03, beta_2=0.499, epsilon=None, decay=0.00001, amsgrad=True)
+    
+    #model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
+    model.compile(loss='categorical_crossentropy', optimizer=adam, metrics=['accuracy'])
 
 
     X_train = load_hdf5(dataset_path + img_train_file)        # Normalized into 0 ~ 1 already.
@@ -371,11 +349,11 @@ def train(run):
     print 'last weight file nm = ',lastWeights 
     model.save_weights(lastWeights, overwrite=True)
     
-    test(run,'best')
-    test(run,'last')
+    test(model, run,'best')
+    test(model, run,'last')
     K.clear_session()
 
-def test(run, best_or_last):
+def test(model, run, best_or_last):
 
     # test the network trained 
     X_test = load_hdf5(dataset_path + img_test_file)
@@ -401,14 +379,15 @@ def test(run, best_or_last):
 
  
     #model = vgg16_scratch(input, nb_classes )
-    model = vgg16_scratch( nb_classes )
     load_weight_fn = path_experiment + name_experiment + '_' + str(nb_classes) + '_cnn_' + best_or_last + '_weight_' + str(run) + '.h5'
     print 'load file nm = ' , load_weight_fn  
     model.load_weights(load_weight_fn)
 
 
     y_pred = model.predict(X_test, batch_size=32, verbose=2)
-    #y_class = [ np.argmax(row) for row in y_pred] 
+    y_class = [ np.argmax(row) for row in y_pred] 
+    
+
     #print zip(y_pred, y_class)
     y_class = [ row[1] for row in y_pred] 
     #print zip(y_pred, y_class)
@@ -424,6 +403,74 @@ def test(run, best_or_last):
     fp.close()
 
 
+    #draw result graph
+    #y_pred = model.predict(X_test, batch_size=32, verbose=2)
+    #y_class = [row[1] for row in y_pred]
+
+    best_or_last_list = ['best', 'last']
+    idx = best_or_last_list.index(best_or_last)
+    # roc
+    plt.figure(3*idx)
+    fpr, tpr, thresholds = roc_curve(y_test, y_class)
+    plt.plot(fpr, tpr, 'b', alpha=0.2)
+    tpr = interp(base_fpr, fpr, tpr)
+    tpr[0] = 0.0
+    tprs[idx].append(tpr)
+
+    # precision-recall
+    plt.figure(3*idx+1)
+    precision, recall, thresholds = precision_recall_curve(y_test, y_class)
+    prec = np.fliplr([precision])[0]  # the array is increasing
+    recall = np.fliplr([recall])[0]  # the array is increasing
+    plt.plot(recall, prec, 'b', alpha=0.2)
+    prec = interp(base_recall, recall, prec)
+    precisions[idx].append(prec)
+
+
+
+def draw_result(modelNm):
+    best_or_last = ['best', 'last']
+    for idx in range(2):
+       # roc curve
+       tprs[idx] = np.array(tprs[idx])
+       mean_tprs = tprs[idx].mean(axis=0)
+       std = tprs[idx].std(axis=0)
+
+       tprs_upper = np.minimum(mean_tprs + std, 1)
+       tprs_lower = mean_tprs - std
+
+       plt.figure(3*idx)
+       plt.plot(base_fpr, mean_tprs, 'b')
+       plt.fill_between(base_fpr, tprs_lower, tprs_upper, color='gray', alpha=0.3)
+       plt.plot([0,1], [0,1],'r--')
+       plt.xlim([0, 1.00])
+       plt.ylim([0, 1.00])
+       plt.ylabel('True Positive Rate')
+       plt.xlabel('False Positive Rate')
+       plt.axes().set_aspect('equal', 'datalim')
+       plt.grid()
+       #plt.show()
+       plt.savefig(path_experiment+ modelNm + "_ROC_" + best_or_last[idx] + '_wgt' + '.png')
+
+       # precision-recall curve
+       precisions[idx] = np.array(precisions[idx])
+       mean_precs = precisions[idx].mean(axis=0)
+       std = precisions[idx].std(axis=0)
+
+       precs_upper = np.minimum(mean_precs + std, 1)
+       precs_lower = mean_precs - std
+
+       plt.figure(3*idx+1)
+       plt.plot(base_recall, mean_precs, 'b')
+       plt.fill_between(base_recall, precs_lower, precs_upper, color='gray', alpha=0.3)
+       plt.xlim([0, 1.00])
+       plt.ylim([0.5, 1.00])
+       plt.ylabel('Precision')
+       plt.xlabel('Recall')
+       plt.axes().set_aspect('equal', 'datalim')
+       plt.grid()
+       #plt.show()
+       plt.savefig(path_experiment+ modelNm+ "_PRECISION_" + best_or_last[idx] + '_wgt' + '.png')
 
 #--------------- run ------------------------------------------------------------------------- 
 def main():
@@ -449,8 +496,8 @@ def main():
     ratio_test_data = 0.15
     ratio_validation_data = 0.25
 
-    num_runs = 10
-    nb_epoch = 1000
+    num_runs = 20
+    nb_epoch = 400
 
     data_augmentation = False
     batch_size = 32
@@ -478,6 +525,14 @@ def main():
     img_test_file = name_experiment + '_dataset_imgs_test.hdf5'
     label_test_file =  name_experiment + '_dataset_groundTruth_test.hdf5'
 
+
+    # variables for plot roc and precision curves
+    global tprs, precisions, base_fpr, base_recall
+    tprs = [[], []]
+    precisions = [[], []]
+    base_fpr = np.linspace(0,1,101)
+    base_recall = np.linspace(0,1,101)
+
     #---------------------------------------------------------------------------------------------
 
     #-------
@@ -486,10 +541,16 @@ def main():
     nb_images = len(glob.glob(os.path.join(IMG_FOLDER, '*', INPUT_FILE_PATTERN)))
     nb_test_images = len(glob.glob(os.path.join(IMG_TEST, '*', INPUT_FILE_PATTERN)))
     print('No. of image data: {}'.format(nb_images))
+    
 
+    modelNm = 'vgg16_custom2'
+    #modelNm = 'vgg16_custom'
     for run in range(num_runs):
-        train(run)
+        train(modelNm ,run)
+        #train('vgg16_scratch',run)
         #break
+    draw_result(modelNm)
+
 
 if __name__ == "__main__":
     main()
